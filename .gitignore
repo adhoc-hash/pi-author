@@ -1,0 +1,10 @@
+.claude/
+
+node_modules/
+
+# ref
+auto/
+doc/
+Nika-Character-Studio/
+ST-CardGen/
+stagedog.github.io/
