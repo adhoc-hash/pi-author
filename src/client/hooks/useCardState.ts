@@ -9,6 +9,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { UseWebSocketReturn } from './useWebSocket';
 import type { CharacterCardV3, EntryCategory, LorebookEntry } from '../../server/card/schema';
 import type { LLMConfig, ChatMessage, ServerMessage } from '@shared/protocol';
+import { embedDataIntoPng } from '../utils/pngReader';
 
 export type ToastFn = (message: string, type?: 'success' | 'error' | 'info') => void;
 
@@ -22,14 +23,16 @@ export interface UseCardStateReturn {
   streaming: boolean;
   streamContent: string;
   llmConfig: LLMConfig | null;
+  originalPng: ArrayBuffer | null;
   sendChat: (content: string) => void;
   editEntry: (entryId: number, updates: Partial<LorebookEntry>) => void;
   addEntry: (category: EntryCategory, label: string, content: string) => void;
   deleteEntry: (entryId: number) => void;
   editMeta: (field: string, value: any) => void;
   setFirstMes: (content: string) => void;
-  importCard: (card: CharacterCardV3) => void;
-  exportCard: () => void;
+  importCard: (card: CharacterCardV3, originalPng?: ArrayBuffer | null) => void;
+  exportCard: (format: 'json' | 'png') => void;
+  exportCardWithPng: (pngBuffer: ArrayBuffer) => void;
   newCard: () => void;
   updateLLMConfig: (config: LLMConfig) => void;
 }
@@ -43,6 +46,7 @@ export function useCardState(ws: UseWebSocketReturn, opts?: UseCardStateOptions)
   const [streaming, setStreaming] = useState(false);
   const [streamContent, setStreamContent] = useState('');
   const [llmConfig, setLLMConfig] = useState<LLMConfig | null>(null);
+  const [originalPng, setOriginalPng] = useState<ArrayBuffer | null>(null);
 
   // Ref for stream accumulation — avoids nested setState
   const streamRef = useRef('');
@@ -121,15 +125,24 @@ export function useCardState(ws: UseWebSocketReturn, opts?: UseCardStateOptions)
           break;
 
         case 'export_ready': {
-          const filename = downloadJson(msg.card);
-          toast?.(`已导出: ${filename}`, 'success');
+          if (msg.format === 'png') {
+            // PNG export handled on client
+            downloadPng(msg.card, originalPng).then(filename => {
+              toast?.(`已导出: ${filename}`, 'success');
+            }).catch(err => {
+              toast?.(`导出失败: ${err.message}`, 'error');
+            });
+          } else {
+            const filename = downloadJson(msg.card);
+            toast?.(`已导出: ${filename}`, 'success');
+          }
           break;
         }
       }
     });
 
     return removeHandler;
-  }, [ws]);
+  }, [ws, originalPng, toast]);
 
   const sendChat = useCallback((content: string) => {
     if (!content.trim()) return;
@@ -165,18 +178,27 @@ export function useCardState(ws: UseWebSocketReturn, opts?: UseCardStateOptions)
     ws.send({ type: 'set_first_mes', content });
   }, [ws]);
 
-  const importCard = useCallback((cardData: CharacterCardV3) => {
+  const importCard = useCallback((cardData: CharacterCardV3, pngData?: ArrayBuffer | null) => {
     ws.send({ type: 'import_card', card: cardData });
     setMessages([]);
+    setOriginalPng(pngData ?? null);
   }, [ws]);
 
-  const exportCard = useCallback(() => {
-    ws.send({ type: 'export_card' });
+  const exportCard = useCallback((format: 'json' | 'png') => {
+    ws.send({ type: 'export_card', format });
   }, [ws]);
+
+  const exportCardWithPng = useCallback((pngBuffer: ArrayBuffer) => {
+    // 直接在前端导出 PNG
+    if (card) {
+      downloadPng(card, pngBuffer);
+    }
+  }, [card]);
 
   const newCard = useCallback(() => {
     ws.send({ type: 'new_card' });
     setMessages([]);
+    setOriginalPng(null);
   }, [ws]);
 
   const updateLLMConfig = useCallback((config: LLMConfig) => {
@@ -185,15 +207,27 @@ export function useCardState(ws: UseWebSocketReturn, opts?: UseCardStateOptions)
   }, [ws]);
 
   return {
-    card, messages, streaming, streamContent, llmConfig,
+    card, messages, streaming, streamContent, llmConfig, originalPng,
     sendChat, editEntry, addEntry, deleteEntry, editMeta,
-    setFirstMes, importCard, exportCard, newCard, updateLLMConfig,
+    setFirstMes, importCard, exportCard, exportCardWithPng, newCard, updateLLMConfig,
   };
 }
 
 function downloadJson(card: CharacterCardV3): string {
   const filename = `${card.data.name || 'character'}.json`;
   const blob = new Blob([JSON.stringify(card, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+  return filename;
+}
+
+async function downloadPng(card: CharacterCardV3, originalPng: ArrayBuffer | null): Promise<string> {
+  const blob = await embedDataIntoPng(originalPng, card);
+  const filename = `${card.data.name || 'character'}.png`;
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

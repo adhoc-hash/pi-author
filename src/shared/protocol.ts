@@ -26,7 +26,7 @@ export type ClientMessage =
   | { type: 'set_first_mes'; content: string }
   | { type: 'add_alternate_greeting'; content: string }
   | { type: 'import_card'; card: CharacterCardV3 }
-  | { type: 'export_card' }
+  | { type: 'export_card'; format: 'json' | 'png'; originalPng?: ArrayBuffer }
   | { type: 'new_card' }
   | { type: 'update_llm_config'; config: LLMConfig };
 
@@ -41,7 +41,7 @@ export type ServerMessage =
   | { type: 'card_updated'; card: CharacterCardV3 }
   | { type: 'error'; message: string }
   | { type: 'connected'; card: CharacterCardV3; config: LLMConfig | null }
-  | { type: 'export_ready'; card: CharacterCardV3 };
+  | { type: 'export_ready'; card: CharacterCardV3; format: 'json' | 'png' };
 
 // ─── Chat Message (for history display) ───
 

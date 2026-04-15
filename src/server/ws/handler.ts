@@ -97,7 +97,7 @@ export function handleConnection(ws: WebSocket) {
           break;
 
         case 'export_card':
-          send(ws, { type: 'export_ready', card: cardState.getCard() });
+          send(ws, { type: 'export_ready', card: cardState.getCard(), format: msg.format || 'json' });
           break;
 
         case 'new_card':
