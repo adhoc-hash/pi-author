@@ -15,6 +15,8 @@ import { buildSystemPrompt } from './system-prompt.js';
 import { AGENT_TOOLS } from './tools.js';
 import { getClient, getModel } from '../llm/provider.js';
 import type { EntryCategory } from '../card/schema.js';
+import type { ChatCompletionPreset, PromptEntry } from '../preset/schema.js';
+import { getActivePrompts, sortPromptsByOrder } from '../preset/schema.js';
 
 export interface AgentCallbacks {
   onStreamStart: () => void;
@@ -24,6 +26,8 @@ export interface AgentCallbacks {
   onToolResult: (name: string, summary: string) => void;
   onCardUpdated: () => void;
   onError: (message: string) => void;
+  /** 获取当前预设（可选） */
+  getPreset?: () => ChatCompletionPreset | null;
 }
 
 export class AgentLoop {
@@ -71,6 +75,28 @@ export class AgentLoop {
     }
   }
 
+  /**
+   * 将预设中的 prompts 转换为消息格式
+   */
+  private buildPresetMessages(preset: ChatCompletionPreset): ChatCompletionMessageParam[] {
+    const activePrompts = getActivePrompts(preset.prompts);
+    const sortedPrompts = sortPromptsByOrder(activePrompts);
+
+    const messages: ChatCompletionMessageParam[] = [];
+
+    for (const prompt of sortedPrompts) {
+      // 跳过空内容的 prompt
+      if (!prompt.content?.trim()) continue;
+
+      messages.push({
+        role: prompt.role as 'system' | 'user' | 'assistant',
+        content: prompt.content,
+      });
+    }
+
+    return messages;
+  }
+
   private async runAgentLoop(client: OpenAI, systemPrompt: string): Promise<void> {
     const model = getModel();
     let continueLoop = true;
@@ -78,10 +104,19 @@ export class AgentLoop {
     while (continueLoop) {
       continueLoop = false;
 
+      // 构建消息：系统提示 + 预设prompts + 历史对话
       const messages: ChatCompletionMessageParam[] = [
         { role: 'system', content: systemPrompt },
-        ...this.history,
       ];
+
+      // 如果有预设，插入预设的 prompts
+      const preset = this.callbacks.getPreset?.();
+      if (preset) {
+        const presetMessages = this.buildPresetMessages(preset);
+        messages.push(...presetMessages);
+      }
+
+      messages.push(...this.history);
 
       let fullContent = '';
       let toolCalls: ChatCompletionMessageToolCall[] = [];

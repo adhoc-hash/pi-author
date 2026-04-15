@@ -13,6 +13,11 @@ import {
 } from '../llm/provider.js';
 import type { ClientMessage, ServerMessage } from '../../shared/protocol.js';
 import type { EntryCategory } from '../card/schema.js';
+import type { ChatCompletionPreset } from '../preset/schema.js';
+
+// 全局预设状态（每个连接可以有自己的预设，这里简化为全局）
+let currentPreset: ChatCompletionPreset | null = null;
+let currentPresetName: string | null = null;
 
 function send(ws: WebSocket, msg: ServerMessage) {
   if (ws.readyState === ws.OPEN) {
@@ -46,6 +51,7 @@ export function handleConnection(ws: WebSocket) {
       send(ws, { type: 'card_updated', card: cardState.getCard() });
     },
     onError: (message) => send(ws, { type: 'error', message }),
+    getPreset: () => currentPreset,
   });
 
   ws.on('message', async (raw) => {
@@ -114,8 +120,20 @@ export function handleConnection(ws: WebSocket) {
           });
           break;
 
+        case 'import_preset':
+          currentPreset = msg.preset;
+          currentPresetName = null;
+          send(ws, { type: 'preset_loaded', presetName: '已加载预设' });
+          break;
+
+        case 'clear_preset':
+          currentPreset = null;
+          currentPresetName = null;
+          send(ws, { type: 'preset_cleared' });
+          break;
+
         default:
-          send(ws, { type: 'error', message: `未知消息类型` });
+          send(ws, { type: 'error', message: '未知消息类型' });
       }
     } catch (error: any) {
       send(ws, { type: 'error', message: error?.message || String(error) });

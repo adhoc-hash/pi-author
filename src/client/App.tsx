@@ -4,6 +4,8 @@ import { useCardState } from './hooks/useCardState';
 import { ChatPanel } from './components/ChatPanel';
 import { CardPreview } from './components/CardPreview';
 import { SettingsDialog } from './components/SettingsDialog';
+import { PresetPanel } from './components/PresetPanel';
+import type { ChatCompletionPreset } from '../server/preset/schema';
 
 interface ToastItem {
   id: number;
@@ -17,8 +19,11 @@ export default function App() {
   const ws = useWebSocket();
   const [showSettings, setShowSettings] = useState(false);
   const [showCard, setShowCard] = useState(false);
+  const [showPreset, setShowPreset] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [preset, setPreset] = useState<ChatCompletionPreset | null>(null);
+  const [presetFileName, setPresetFileName] = useState<string | null>(null);
 
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
     const id = ++toastId;
@@ -59,7 +64,6 @@ export default function App() {
 
   const handleExport = async (format: 'json' | 'png') => {
     if (format === 'png' && !state.originalPng) {
-      // 没有原始 PNG，让用户选择背景图片
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = 'image/png,image/jpeg,image/webp';
@@ -68,12 +72,10 @@ export default function App() {
         if (!file) return;
         try {
           const buffer = await file.arrayBuffer();
-          // 转换为 PNG 格式（如果需要）
           let pngBuffer: ArrayBuffer;
           if (file.type === 'image/png') {
             pngBuffer = buffer;
           } else {
-            // 将其他格式转换为 PNG
             pngBuffer = await convertToPng(buffer, file.type);
           }
           state.exportCardWithPng(pngBuffer);
@@ -114,6 +116,54 @@ export default function App() {
       img.src = URL.createObjectURL(new Blob([buffer], { type: mimeType }));
     });
   };
+
+  // 导入预设
+  const handleImportPreset = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const presetData = JSON.parse(text) as ChatCompletionPreset;
+        if (!Array.isArray(presetData.prompts)) {
+          throw new Error('无效的预设文件：缺少 prompts 数组');
+        }
+        setPreset(presetData);
+        setPresetFileName(file.name);
+        state.importPreset(presetData);
+        showToast(`已导入预设: ${file.name}`, 'success');
+        setShowPreset(true);
+      } catch (err: any) {
+        showToast(err?.message || '无法解析预设文件', 'error');
+      }
+    };
+    input.click();
+  };
+
+  // 切换预设条目启用状态
+  const handleTogglePresetEntry = useCallback((identifier: string, enabled: boolean) => {
+    if (!preset) return;
+    setPreset(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        prompts: prev.prompts.map(p =>
+          p.identifier === identifier ? { ...p, enabled } : p
+        ),
+      };
+    });
+  }, [preset]);
+
+  // 清除预设
+  const handleClearPreset = useCallback(() => {
+    setPreset(null);
+    setPresetFileName(null);
+    state.clearPreset();
+    setShowPreset(false);
+  }, [state]);
 
   const entryCount = state.card?.data.character_book?.entries.length ?? 0;
 
@@ -168,6 +218,19 @@ export default function App() {
           <button className="btn btn--ghost btn--sm" onClick={state.newCard} title="新建卡片">
             🔄 新建
           </button>
+          <button
+            className={`btn btn--ghost btn--sm ${showPreset ? 'btn--active' : ''}`}
+            onClick={() => {
+              if (preset) {
+                setShowPreset(!showPreset);
+              } else {
+                handleImportPreset();
+              }
+            }}
+            title={preset ? '管理预设' : '导入预设'}
+          >
+            📋 预设 {preset && <span className="badge" style={{ marginLeft: 4 }}>✓</span>}
+          </button>
           <button className="btn btn--ghost btn--sm" onClick={() => setShowSettings(true)} title="设置">
             ⚙️ 设置
           </button>
@@ -194,6 +257,22 @@ export default function App() {
                 <button className="btn btn--ghost btn--sm" onClick={() => setShowCard(false)}>✕</button>
               </div>
               <CardPreview card={state.card} />
+            </div>
+          </>
+        )}
+
+        {/* Preset Panel Drawer */}
+        {showPreset && preset && (
+          <>
+            <div className="drawer-backdrop" onClick={() => setShowPreset(false)} />
+            <div className="drawer">
+              <PresetPanel
+                preset={preset}
+                presetName={presetFileName || '未命名预设'}
+                onClose={() => setShowPreset(false)}
+                onToggleEntry={handleTogglePresetEntry}
+                onClearPreset={handleClearPreset}
+              />
             </div>
           </>
         )}

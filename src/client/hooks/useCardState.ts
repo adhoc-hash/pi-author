@@ -8,6 +8,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { UseWebSocketReturn } from './useWebSocket';
 import type { CharacterCardV3, EntryCategory, LorebookEntry } from '../../server/card/schema';
+import type { ChatCompletionPreset } from '../../server/preset/schema';
 import type { LLMConfig, ChatMessage, ServerMessage } from '@shared/protocol';
 import { embedDataIntoPng } from '../utils/pngReader';
 
@@ -24,6 +25,7 @@ export interface UseCardStateReturn {
   streamContent: string;
   llmConfig: LLMConfig | null;
   originalPng: ArrayBuffer | null;
+  presetName: string | null;
   sendChat: (content: string) => void;
   editEntry: (entryId: number, updates: Partial<LorebookEntry>) => void;
   addEntry: (category: EntryCategory, label: string, content: string) => void;
@@ -31,6 +33,8 @@ export interface UseCardStateReturn {
   editMeta: (field: string, value: any) => void;
   setFirstMes: (content: string) => void;
   importCard: (card: CharacterCardV3, originalPng?: ArrayBuffer | null) => void;
+  importPreset: (preset: ChatCompletionPreset) => void;
+  clearPreset: () => void;
   exportCard: (format: 'json' | 'png') => void;
   exportCardWithPng: (pngBuffer: ArrayBuffer) => void;
   newCard: () => void;
@@ -47,6 +51,7 @@ export function useCardState(ws: UseWebSocketReturn, opts?: UseCardStateOptions)
   const [streamContent, setStreamContent] = useState('');
   const [llmConfig, setLLMConfig] = useState<LLMConfig | null>(null);
   const [originalPng, setOriginalPng] = useState<ArrayBuffer | null>(null);
+  const [presetName, setPresetName] = useState<string | null>(null);
 
   // Ref for stream accumulation — avoids nested setState
   const streamRef = useRef('');
@@ -138,6 +143,15 @@ export function useCardState(ws: UseWebSocketReturn, opts?: UseCardStateOptions)
           }
           break;
         }
+
+        case 'preset_loaded':
+          setPresetName(msg.presetName);
+          toast?.(`已加载预设`, 'success');
+          break;
+
+        case 'preset_cleared':
+          setPresetName(null);
+          break;
       }
     });
 
@@ -184,6 +198,14 @@ export function useCardState(ws: UseWebSocketReturn, opts?: UseCardStateOptions)
     setOriginalPng(pngData ?? null);
   }, [ws]);
 
+  const importPreset = useCallback((preset: ChatCompletionPreset) => {
+    ws.send({ type: 'import_preset', preset });
+  }, [ws]);
+
+  const clearPreset = useCallback(() => {
+    ws.send({ type: 'clear_preset' });
+  }, [ws]);
+
   const exportCard = useCallback((format: 'json' | 'png') => {
     ws.send({ type: 'export_card', format });
   }, [ws]);
@@ -207,9 +229,9 @@ export function useCardState(ws: UseWebSocketReturn, opts?: UseCardStateOptions)
   }, [ws]);
 
   return {
-    card, messages, streaming, streamContent, llmConfig, originalPng,
+    card, messages, streaming, streamContent, llmConfig, originalPng, presetName,
     sendChat, editEntry, addEntry, deleteEntry, editMeta,
-    setFirstMes, importCard, exportCard, exportCardWithPng, newCard, updateLLMConfig,
+    setFirstMes, importCard, importPreset, clearPreset, exportCard, exportCardWithPng, newCard, updateLLMConfig,
   };
 }
 

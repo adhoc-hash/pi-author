@@ -3,6 +3,7 @@
  */
 
 import type { CharacterCardV3, LorebookEntry, EntryCategory } from '../server/card/schema.js';
+import type { ChatCompletionPreset } from '../server/preset/schema.js';
 
 // ─── LLM Configuration ───
 
@@ -28,7 +29,9 @@ export type ClientMessage =
   | { type: 'import_card'; card: CharacterCardV3 }
   | { type: 'export_card'; format: 'json' | 'png'; originalPng?: ArrayBuffer }
   | { type: 'new_card' }
-  | { type: 'update_llm_config'; config: LLMConfig };
+  | { type: 'update_llm_config'; config: LLMConfig }
+  | { type: 'import_preset'; preset: ChatCompletionPreset }
+  | { type: 'clear_preset' };
 
 // ─── Server → Client Messages ───
 
@@ -41,7 +44,9 @@ export type ServerMessage =
   | { type: 'card_updated'; card: CharacterCardV3 }
   | { type: 'error'; message: string }
   | { type: 'connected'; card: CharacterCardV3; config: LLMConfig | null }
-  | { type: 'export_ready'; card: CharacterCardV3; format: 'json' | 'png' };
+  | { type: 'export_ready'; card: CharacterCardV3; format: 'json' | 'png' }
+  | { type: 'preset_loaded'; presetName: string }
+  | { type: 'preset_cleared' };
 
 // ─── Chat Message (for history display) ───
 
