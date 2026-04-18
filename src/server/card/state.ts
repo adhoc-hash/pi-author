@@ -270,7 +270,8 @@ export class CardState {
 
     const lines: string[] = [];
     lines.push(`📋 卡片名称: ${this.card.data.name || '(未命名)'}`);
-    lines.push(`🏷️ Tags: ${this.card.data.tags.join(', ') || '(无)'}`);
+    const tags = Array.isArray(this.card.data.tags) ? this.card.data.tags : [];
+  lines.push(`🏷️ Tags: ${tags.join(', ') || '(无)'}`);
     lines.push(`✍️ Creator: ${this.card.data.creator || '(未设置)'}`);
     lines.push('');
 

@@ -198,7 +198,7 @@ function MetaView({ card }: { card: CharacterCardV3 }) {
     <div className="meta-section">
       <MetaField label="名称" value={card.data.name} />
       <MetaField label="描述" value={card.data.description} />
-      <MetaField label="Tags" value={card.data.tags.join(', ')} />
+      <MetaField label="Tags" value={(Array.isArray(card.data.tags) ? card.data.tags : []).join(', ')} />
       <MetaField label="Creator" value={card.data.creator} />
       <MetaField label="Creator Notes" value={card.data.creator_notes} />
       <MetaField label="版本" value={card.data.character_version} />
