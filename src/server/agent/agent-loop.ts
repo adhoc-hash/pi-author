@@ -84,6 +84,8 @@ export class AgentLoop {
 
   private async runAgentLoop(config: LLMConfig, systemPrompt: string): Promise<void> {
     let continueLoop = true;
+    // 最终轮的文本缓冲：有 tool call 时先缓冲，等最终轮一次性流式推送
+    let pendingChunks: string[] = [];
 
     while (continueLoop) {
       continueLoop = false;
@@ -130,21 +132,27 @@ export class AgentLoop {
         }
 
         console.log(`[AgentLoop] Stream finished. toolCalls=${toolCalls.length}, chunks=${chunks.length}`);
-
-        if (toolCalls.length === 0 && chunks.length > 0) {
-          this.callbacks.onStreamStart();
-          for (const c of chunks) {
-            this.callbacks.onStreamChunk(c);
-          }
-          this.callbacks.onStreamEnd();
-        } else if (toolCalls.length === 0 && chunks.length === 0) {
-          this.callbacks.onStreamStart();
-          this.callbacks.onStreamEnd();
-        }
       } catch (error: any) {
         console.error(`[AgentLoop] Error:`, error);
         this.callbacks.onError(`LLM streaming error: ${error?.message || String(error)}`);
         return;
+      }
+
+      // 有 tool call 时，本轮 text 缓冲到 pendingChunks（不发给客户端）
+      // 无 tool call 时，本轮 text 连同之前缓冲的 pendingChunks 一起流式推送
+      if (toolCalls.length > 0) {
+        pendingChunks.push(...chunks);
+      } else {
+        const allChunks = [...pendingChunks, ...chunks];
+        pendingChunks = [];
+
+        if (allChunks.length > 0) {
+          this.callbacks.onStreamStart();
+          for (const c of allChunks) {
+            this.callbacks.onStreamChunk(c);
+          }
+          this.callbacks.onStreamEnd();
+        }
       }
 
       // 写入 assistant 消息到历史
@@ -217,7 +225,7 @@ export class AgentLoop {
         const entries = this.cardState.listEntries();
         if (entries.length === 0) return '当前没有任何entries。';
         return entries
-          .map((e) => `[ID:${e.id}] [${e.category || '未分类'}] ${e.label} ${e.enabled ? '✅' : '❌'}\n  ${e.contentPreview}`)
+          .map((e) => `[ID:${e.id}] [${e.category || '未分类'}] ${e.label} ${e.enabled ? '✅' : '❌'}\n ${e.contentPreview}`)
           .join('\n\n');
       }
 
