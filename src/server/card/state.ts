@@ -143,6 +143,12 @@ export class CardState {
       this.card.name = value;
       this.card.data.name = value;
       this.card.data.character_book.name = value;
+    } else if (field === 'tags') {
+      // AI可能传入字符串而非数组，统一归一化
+      const tags = typeof value === 'string'
+        ? value.split(/[,，、\s]+/).map((t: string) => t.trim()).filter(Boolean)
+        : Array.isArray(value) ? value.map(String) : [];
+      this.card.data.tags = tags.slice(0, 10);
     } else if (field in this.card.data) {
       (this.card.data as any)[field] = value;
     }
