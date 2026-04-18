@@ -296,6 +296,9 @@ export default function App() {
           config={state.llmConfig}
           onSave={state.updateLLMConfig}
           onClose={() => setShowSettings(false)}
+          connected={ws.connected}
+          send={ws.send}
+          addHandler={ws.addHandler}
         />
       )}
     </div>

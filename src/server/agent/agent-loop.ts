@@ -1,21 +1,19 @@
 /**
  * Agent Loop
  *
- * Manages the conversation with the LLM, handles tool calls,
- * and streams responses back to the client via callbacks.
+ * 管理与 LLM 的对话，处理工具调用，
+ * 通过回调将响应流式传回客户端。
  */
 
-import OpenAI from 'openai';
-import type {
-  ChatCompletionMessageParam,
-  ChatCompletionMessageToolCall,
-} from 'openai/resources/chat/completions';
 import { CardState } from '../card/state.js';
 import { buildSystemPrompt } from './system-prompt.js';
 import { AGENT_TOOLS } from './tools.js';
-import { getClient, getModel } from '../llm/provider.js';
+import { getCurrentConfig, getDefaultModel } from '../llm/provider.js';
+import { streamChat } from '../llm/service.js';
+import type { ChatMessage, LlmStreamEvent, ToolCall } from '../llm/types.js';
+import type { LLMConfig } from '../../shared/protocol.js';
 import type { EntryCategory } from '../card/schema.js';
-import type { ChatCompletionPreset, PromptEntry } from '../preset/schema.js';
+import type { ChatCompletionPreset } from '../preset/schema.js';
 import { getActivePrompts, sortPromptsByOrder } from '../preset/schema.js';
 
 export interface AgentCallbacks {
@@ -31,7 +29,7 @@ export interface AgentCallbacks {
 }
 
 export class AgentLoop {
-  private history: ChatCompletionMessageParam[] = [];
+  private history: ChatMessage[] = [];
   private cardState: CardState;
   private callbacks: AgentCallbacks;
 
@@ -40,54 +38,41 @@ export class AgentLoop {
     this.callbacks = callbacks;
   }
 
-  /** Get current conversation history length for potential compaction */
   getHistoryLength(): number {
     return this.history.length;
   }
 
-  /** Reset conversation history */
   resetHistory() {
     this.history = [];
   }
 
-  /**
-   * Process a user message: send to LLM, handle tool calls, stream response.
-   */
   async processMessage(userMessage: string): Promise<void> {
     console.log(`[AgentLoop] processMessage called with: "${userMessage.substring(0, 50)}..."`);
-    const client = getClient();
-    if (!client) {
+    const config = getCurrentConfig();
+    if (!config?.apiKey) {
       this.callbacks.onError('LLM未配置。请在设置中配置API Key。');
       return;
     }
 
-    // Add user message to history
     this.history.push({ role: 'user', content: userMessage });
-
-    // Build system prompt with current card state
     const systemPrompt = buildSystemPrompt(this.cardState.getCardSummary());
 
     try {
-      await this.runAgentLoop(client, systemPrompt);
+      await this.runAgentLoop(config, systemPrompt);
     } catch (error: any) {
       const msg = error?.message || String(error);
       this.callbacks.onError(`LLM请求失败: ${msg}`);
     }
   }
 
-  /**
-   * 将预设中的 prompts 转换为消息格式
-   */
-  private buildPresetMessages(preset: ChatCompletionPreset): ChatCompletionMessageParam[] {
+  private buildPresetMessages(preset: ChatCompletionPreset): ChatMessage[] {
     const activePrompts = getActivePrompts(preset.prompts);
     const sortedPrompts = sortPromptsByOrder(activePrompts);
 
-    const messages: ChatCompletionMessageParam[] = [];
+    const messages: ChatMessage[] = [];
 
     for (const prompt of sortedPrompts) {
-      // 跳过空内容的 prompt
       if (!prompt.content?.trim()) continue;
-
       messages.push({
         role: prompt.role as 'system' | 'user' | 'assistant',
         content: prompt.content,
@@ -97,19 +82,15 @@ export class AgentLoop {
     return messages;
   }
 
-  private async runAgentLoop(client: OpenAI, systemPrompt: string): Promise<void> {
-    const model = getModel();
+  private async runAgentLoop(config: LLMConfig, systemPrompt: string): Promise<void> {
     let continueLoop = true;
 
     while (continueLoop) {
       continueLoop = false;
 
       // 构建消息：系统提示 + 预设prompts + 历史对话
-      const messages: ChatCompletionMessageParam[] = [
-        { role: 'system', content: systemPrompt },
-      ];
+      const messages: ChatMessage[] = [];
 
-      // 如果有预设，插入预设的 prompts
       const preset = this.callbacks.getPreset?.();
       if (preset) {
         const presetMessages = this.buildPresetMessages(preset);
@@ -119,126 +100,91 @@ export class AgentLoop {
       messages.push(...this.history);
 
       let fullContent = '';
-      let toolCalls: ChatCompletionMessageToolCall[] = [];
-      // We don't know if this iteration has tool calls until streaming is done,
-      // so we always stream, but will handle dedup on the client side if needed.
-      // Better approach: do a non-streaming first pass check... but that's wasteful.
-      // Instead: we collect everything, then decide what to send.
+      const toolCalls: ToolCall[] = [];
+      const chunks: string[] = [];
 
       try {
-        const stream = await client.chat.completions.create({
-          model,
+        const eventStream = await streamChat(config, {
+          model: config.model || getDefaultModel(config.providerType),
+          systemPrompt,
           messages,
           tools: AGENT_TOOLS,
-          stream: true,
         });
 
-        // Accumulate tool call fragments
-        const toolCallFragments: Map<number, {
-          id: string;
-          type: 'function';
-          function: { name: string; arguments: string };
-        }> = new Map();
-
-        // Buffer chunks instead of sending immediately
-        const chunks: string[] = [];
-
-        for await (const chunk of stream) {
-          const delta = chunk.choices[0]?.delta;
-
-          if (delta?.content) {
-            fullContent += delta.content;
-            chunks.push(delta.content);
-          }
-
-          if (delta?.tool_calls) {
-            for (const tc of delta.tool_calls) {
-              if (!toolCallFragments.has(tc.index)) {
-                toolCallFragments.set(tc.index, {
-                  id: tc.id || '',
-                  type: 'function' as const,
-                  function: { name: '', arguments: '' },
-                });
-              }
-              const existing = toolCallFragments.get(tc.index)!;
-              if (tc.id) existing.id = tc.id;
-              if (tc.function?.name) existing.function.name += tc.function.name;
-              if (tc.function?.arguments) existing.function.arguments += tc.function.arguments;
-            }
+        for await (const event of eventStream) {
+          switch (event.type) {
+            case 'text':
+              fullContent += event.text;
+              chunks.push(event.text);
+              break;
+            case 'tool_call':
+              toolCalls.push({
+                id: event.id,
+                name: event.name,
+                argumentsJson: event.argumentsJson,
+              });
+              break;
+            case 'done':
+              break;
           }
         }
 
-        toolCalls = Array.from(toolCallFragments.values());
+        console.log(`[AgentLoop] Stream finished. toolCalls=${toolCalls.length}, chunks=${chunks.length}`);
 
-        // Now decide: if this is a tool-call iteration, DON'T stream to client.
-        // If this is the final response (no tool calls), send everything.
-        console.log(`[AgentLoop] Finished OpenAI stream. Iteration toolCalls=${toolCalls.length}, chunks=${chunks.length}`);
-        
         if (toolCalls.length === 0 && chunks.length > 0) {
-          console.log(`[AgentLoop] Sending chunks to client... fullContent length: ${fullContent.length}`);
-          // Final response — stream all buffered chunks to client
           this.callbacks.onStreamStart();
           for (const c of chunks) {
             this.callbacks.onStreamChunk(c);
           }
           this.callbacks.onStreamEnd();
-          console.log(`[AgentLoop] Finished sending chunks to client.`);
         } else if (toolCalls.length === 0 && chunks.length === 0) {
-          // Empty final response — still notify client
           this.callbacks.onStreamStart();
           this.callbacks.onStreamEnd();
         }
-        // If toolCalls.length > 0, we intentionally skip streaming text to avoid duplicates
       } catch (error: any) {
         console.error(`[AgentLoop] Error:`, error);
         this.callbacks.onError(`LLM streaming error: ${error?.message || String(error)}`);
         return;
       }
 
-      // Add assistant message to history
-      const assistantMsg: any = { role: 'assistant' };
+      // 写入 assistant 消息到历史
+      const assistantMsg: ChatMessage = { role: 'assistant' };
       if (fullContent) assistantMsg.content = fullContent;
-      if (toolCalls.length > 0) assistantMsg.tool_calls = toolCalls;
+      if (toolCalls.length > 0) assistantMsg.toolCalls = toolCalls;
       this.history.push(assistantMsg);
 
-      // Execute tool calls if any
+      // 执行工具调用
       if (toolCalls.length > 0) {
         console.log(`[AgentLoop] Processing ${toolCalls.length} tool calls...`);
         for (const tc of toolCalls) {
-          const name = tc.function.name;
           let args: Record<string, any> = {};
           try {
-            args = JSON.parse(tc.function.arguments);
+            args = JSON.parse(tc.argumentsJson);
           } catch {
             args = {};
           }
 
-          this.callbacks.onToolCall(name, args);
-          const result = this.executeTool(name, args);
-          this.callbacks.onToolResult(name, result);
+          this.callbacks.onToolCall(tc.name, args);
+          const result = this.executeTool(tc.name, args);
+          this.callbacks.onToolResult(tc.name, result);
           this.callbacks.onCardUpdated();
 
           this.history.push({
             role: 'tool',
-            tool_call_id: tc.id,
+            toolCallId: tc.id,
             content: result,
           });
         }
 
-        // Continue the loop so the agent can respond after tool execution
         continueLoop = true;
       }
     }
 
-    // Simple compaction: if history is very long, summarize older messages
     if (this.history.length > 40) {
       this.compactHistory();
     }
   }
 
-  /**
-   * Execute a single tool call and return the result string.
-   */
   private executeTool(name: string, args: Record<string, any>): string {
     switch (name) {
       case 'update_card_meta': {
@@ -294,22 +240,18 @@ export class AgentLoop {
     }
   }
 
-  /**
-   * Simple compaction: keep last 20 messages, summarize the rest.
-   */
   private compactHistory() {
     if (this.history.length <= 20) return;
 
     const toSummarize = this.history.slice(0, this.history.length - 20);
     const kept = this.history.slice(this.history.length - 20);
 
-    // Create a simple summary
     const userMessages = toSummarize
       .filter((m) => m.role === 'user')
-      .map((m) => (typeof m.content === 'string' ? m.content : '').slice(0, 100))
+      .map((m) => (m.content || '').slice(0, 100))
       .join('; ');
 
-    const summaryMsg: ChatCompletionMessageParam = {
+    const summaryMsg: ChatMessage = {
       role: 'user',
       content: `[对话历史摘要: 之前的对话中，用户提到了: ${userMessages}. 这些讨论已经反映在当前的卡片状态中。]`,
     };

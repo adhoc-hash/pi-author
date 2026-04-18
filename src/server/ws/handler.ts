@@ -10,7 +10,9 @@ import { AgentLoop } from '../agent/agent-loop.js';
 import {
   saveConfig,
   getCurrentConfig,
+  setCurrentConfig,
 } from '../llm/provider.js';
+import { listModels } from '../llm/service.js';
 import type { ClientMessage, ServerMessage } from '../../shared/protocol.js';
 import type { EntryCategory } from '../card/schema.js';
 import type { ChatCompletionPreset } from '../preset/schema.js';
@@ -113,11 +115,21 @@ export function handleConnection(ws: WebSocket) {
 
         case 'update_llm_config':
           saveConfig(msg.config);
+          setCurrentConfig(msg.config);
           send(ws, {
             type: 'connected',
             card: cardState.getCard(),
             config: msg.config,
           });
+          break;
+
+        case 'list_models':
+          try {
+            const models = await listModels(msg.config);
+            send(ws, { type: 'models_list', models });
+          } catch (error: any) {
+            send(ws, { type: 'error', message: `获取模型列表失败: ${error?.message || String(error)}` });
+          }
           break;
 
         case 'import_preset':

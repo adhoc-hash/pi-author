@@ -1,10 +1,13 @@
-import { useState } from 'react';
-import type { LLMConfig, ProviderType } from '@shared/protocol';
+import { useState, useEffect } from 'react';
+import type { LLMConfig, ProviderType, ServerMessage } from '@shared/protocol';
 
 interface SettingsDialogProps {
   config: LLMConfig | null;
   onSave: (config: LLMConfig) => void;
   onClose: () => void;
+  connected: boolean;
+  send: (msg: { type: 'list_models'; config: LLMConfig }) => void;
+  addHandler: (handler: (msg: ServerMessage) => void) => () => void;
 }
 
 const PROVIDER_OPTIONS: Array<{ value: ProviderType; label: string }> = [
@@ -14,20 +17,39 @@ const PROVIDER_OPTIONS: Array<{ value: ProviderType; label: string }> = [
   { value: 'openai-compatible', label: 'OpenAI Compatible' },
 ];
 
-const MODEL_SUGGESTIONS: Record<ProviderType, string[]> = {
-  openai: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'],
-  anthropic: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-3-5-haiku-20241022'],
-  google: ['gemini-2.5-flash', 'gemini-2.5-pro'],
-  'openai-compatible': [],
-};
-
-export function SettingsDialog({ config, onSave, onClose }: SettingsDialogProps) {
+export function SettingsDialog({ config, onSave, onClose, connected, send, addHandler }: SettingsDialogProps) {
   const [formData, setFormData] = useState<LLMConfig>({
     providerType: config?.providerType ?? 'openai',
     apiKey: config?.apiKey ?? '',
     baseUrl: config?.baseUrl ?? '',
     model: config?.model ?? '',
   });
+  const [models, setModels] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+
+  // 监听 models_list 消息
+  useEffect(() => {
+    const unsubscribe = addHandler((msg: ServerMessage) => {
+      if (msg.type === 'models_list') {
+        setModels(msg.models);
+        setLoadingModels(false);
+      }
+    });
+    return unsubscribe;
+  }, [addHandler]);
+
+  const fetchModels = () => {
+    if (!connected) {
+      alert('WebSocket 未连接');
+      return;
+    }
+    if (!formData.apiKey.trim()) {
+      alert('请先输入 API Key');
+      return;
+    }
+    setLoadingModels(true);
+    send({ type: 'list_models', config: formData });
+  };
 
   const handleSave = () => {
     if (!formData.apiKey.trim()) {
@@ -41,8 +63,6 @@ export function SettingsDialog({ config, onSave, onClose }: SettingsDialogProps)
     });
     onClose();
   };
-
-  const suggestions = MODEL_SUGGESTIONS[formData.providerType];
 
   return (
     <div className="dialog-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -92,21 +112,32 @@ export function SettingsDialog({ config, onSave, onClose }: SettingsDialogProps)
         </div>
 
         <div className="dialog__field">
-          <label className="dialog__label">Model（可选）</label>
-          <input
-            className="dialog__input"
-            type="text"
-            placeholder="留空使用默认模型"
-            value={formData.model ?? ''}
-            onChange={(e) => setFormData({ ...formData, model: e.target.value })}
-            list="model-suggestions"
-          />
-          {suggestions.length > 0 && (
-            <datalist id="model-suggestions">
-              {suggestions.map((m) => (
-                <option key={m} value={m} />
+          <label className="dialog__label">Model</label>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <select
+              className="dialog__select"
+              value={formData.model ?? ''}
+              onChange={(e) => setFormData({ ...formData, model: e.target.value })}
+              style={{ flex: 1 }}
+            >
+              <option value="">使用默认模型</option>
+              {models.map((m) => (
+                <option key={m} value={m}>{m}</option>
               ))}
-            </datalist>
+            </select>
+            <button
+              className="btn"
+              onClick={fetchModels}
+              disabled={loadingModels || !formData.apiKey.trim()}
+              title="获取可用模型列表"
+            >
+              {loadingModels ? '加载中...' : '刷新'}
+            </button>
+          </div>
+          {!formData.apiKey.trim() && (
+            <small style={{ color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
+              请先输入 API Key 后点击刷新按钮获取模型列表
+            </small>
           )}
         </div>
 

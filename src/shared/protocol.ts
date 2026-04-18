@@ -31,7 +31,8 @@ export type ClientMessage =
   | { type: 'new_card' }
   | { type: 'update_llm_config'; config: LLMConfig }
   | { type: 'import_preset'; preset: ChatCompletionPreset }
-  | { type: 'clear_preset' };
+  | { type: 'clear_preset' }
+  | { type: 'list_models'; config: LLMConfig };
 
 // ─── Server → Client Messages ───
 
@@ -46,7 +47,8 @@ export type ServerMessage =
   | { type: 'connected'; card: CharacterCardV3; config: LLMConfig | null }
   | { type: 'export_ready'; card: CharacterCardV3; format: 'json' | 'png' }
   | { type: 'preset_loaded'; presetName: string }
-  | { type: 'preset_cleared' };
+  | { type: 'preset_cleared' }
+  | { type: 'models_list'; models: string[] };
 
 // ─── Chat Message (for history display) ───
 

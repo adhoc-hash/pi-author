@@ -7,13 +7,14 @@
 import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { loadConfig } from './llm/provider.js';
+import { loadConfig, setCurrentConfig } from './llm/provider.js';
 import { handleConnection } from './ws/handler.js';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
 // Load saved LLM config
-loadConfig();
+const savedConfig = loadConfig();
+if (savedConfig) setCurrentConfig(savedConfig);
 
 const app = express();
 app.use(express.json());
